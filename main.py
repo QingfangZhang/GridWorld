@@ -15,7 +15,7 @@ class GridWorld:
         self.cur_col = self.start_col
         self.target_row = 3
         self.target_col = 2
-        self.forbidden_pixels = [(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)]
+        self.forbidden_pixels = [(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)]  # 以top left作为(0, 0), (row, col)
         self.bg_color = 0.2
         self.forbidden_color = 1
         self.agent_color = 0.8
@@ -32,7 +32,6 @@ class GridWorld:
         self.prev_col, self.prev_row = self.cur_col, self.cur_row
         self.t = 0
         self.discount_factor = 0.9
-        self.state = np.zeros((self.height*self.width, 1), dtype=float)
         self.actions = ['up', 'right', 'down', 'left', 'center']
 
         fig, self.ax = plt.subplots()
@@ -74,17 +73,17 @@ class GridWorld:
         self.prev_col, self.prev_row = self.cur_col, self.cur_row
         if action == 'down':
             self.arrow_x, self.arrow_y = 0, -1
-            if self.cur_row == 0:
-                reward = self.r_boundary
-            else:
-                self.cur_row -= 1
-                reward = self.check_area()
-        if action == 'up':
-            self.arrow_x, self.arrow_y = 0, 1
             if self.cur_row == self.height - 1:
                 reward = self.r_boundary
             else:
                 self.cur_row += 1
+                reward = self.check_area()
+        if action == 'up':
+            self.arrow_x, self.arrow_y = 0, 1
+            if self.cur_row == 0:
+                reward = self.r_boundary
+            else:
+                self.cur_row -= 1
                 reward = self.check_area()
         if action == 'left':
             self.arrow_x, self.arrow_y = -1, 0
@@ -184,30 +183,70 @@ class GridWorld:
         return state_transit_prob
 
     def value_iteration(self):
-        reward = self.get_reward_table()
-        state_transit_prob = self.get_state_transit_prob()
+        reward = self.get_reward_table()  # (n_actions, height * weight)
+        state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
         k = 0
-        state_value_list = [self.state]
-        # self.plot_policy_and_state(None, self.state, k)
-        while True and k < 200:
-            action_value = reward + self.discount_factor * np.matmul(state_transit_prob,
-                                                                  np.tile(self.state, (len(self.actions), 1, 1))).squeeze()
+        v0 = np.zeros((self.height * self.width, 1), dtype=float)
+        state_value_list = [v0]
+        # self.plot_policy_and_state(None, v0, k)
+        while k < 200:
+            action_value = reward + self.discount_factor * \
+                           np.matmul(state_transit_prob, np.tile(v0, (len(self.actions), 1, 1))).squeeze()
             policy = np.argmax(action_value, axis=0)
-            new_state = np.amax(action_value, axis=0).reshape(-1, 1)
+            v = np.amax(action_value, axis=0).reshape(-1, 1)
             k += 1
-            state_value_list.append(new_state)
-            # self.plot_policy_and_state(policy, new_state, k)
-            if np.linalg.norm(new_state-self.state) < 0.001:
-                self.state = new_state
+            state_value_list.append(v)
+            # self.plot_policy_and_state(policy, v, k)
+            if np.linalg.norm(v-v0) < 0.001:
                 break
             else:
-                self.state = new_state
-        self.plot_policy_and_state(policy, self.state, k)
+                v0 = v
+        self.plot_policy_and_state(policy, v, k)
         plt.figure()
         state_value = np.concatenate(state_value_list, axis=1)
         s = np.diff(state_value, axis=1)
         plt.plot(np.linalg.norm(s, axis=0))
-        plt.show()
+
+    def policy_iteration(self, ini_policy, truncate_time):
+        ini_policy = ini_policy.reshape(1, -1).astype(int)  # (1, (height * width))
+        reward = self.get_reward_table()  # (n_actions, height * weight)
+        state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
+        policy = ini_policy
+        state_value_list = []
+        k = 0
+        pre_v = np.zeros((self.height * self.width, 1))
+        self.plot_policy_and_state(policy, None, k)
+        while k < 200:
+            # policy evaluation
+            r = np.array([reward[policy[0, s], s] for s in range(np.size(policy))]).reshape(-1, 1)  # (1, (height * width))
+            s = np.vstack([np.reshape(state_transit_prob[policy[0, s], s, :], (1, -1))
+                           for s in range(np.size(policy))])  # ((height * width), (height * width))
+            v0 = pre_v
+            j = 0
+            while j < truncate_time:
+                v = r + self.discount_factor * np.matmul(s, v0)  # ((height * width), 1)
+                if np.linalg.norm((v - v0)) < 0.001:
+                    print(f"j is {j}")
+                    break
+                else:
+                    v0 = v
+                j += 1
+            # policy improvement
+            action_value = reward + self.discount_factor * \
+                           np.matmul(state_transit_prob, np.tile(v, (len(self.actions), 1, 1))).squeeze()
+            policy = np.argmax(action_value, axis=0).reshape(1, -1)
+            # self.plot_policy_and_state(policy, v, k)
+            state_value_list.append(v)
+            if np.linalg.norm(v - pre_v) < 0.001:
+                break
+            else:
+                pre_v = v
+            k += 1
+        self.plot_policy_and_state(policy, v, k)
+        plt.figure()
+        state_value = np.concatenate(state_value_list, axis=1)
+        s = np.diff(state_value, axis=1)
+        plt.plot(np.linalg.norm(s, axis=0))
 
     def plot_policy_and_state(self, policy, state, k):
         fig1, ax1=plt.subplots(1, 2, figsize=(10, 5))
@@ -239,12 +278,13 @@ class GridWorld:
                         v[i, j] = 0
             ax1[0].quiver(x, y, u, v, scale=10, color='red')
 
-        self.bg_plot(ax1[1], self.grid)
-        ax1[1].set_title(f'state value, k={k}')
-        state = state.reshape((self.height, self.width))
-        for i in range(state.shape[0]):
-            for j in range(state.shape[1]):
-                ax1[1].text(j, i, "{:.3f}".format(state[i, j]), ha='center', va='center', color='k')
+        if state is not None:
+            self.bg_plot(ax1[1], self.grid)
+            ax1[1].set_title(f'state value, k={k}')
+            state = state.reshape((self.height, self.width))
+            for i in range(state.shape[0]):
+                for j in range(state.shape[1]):
+                    ax1[1].text(j, i, "{:.3f}".format(state[i, j]), ha='center', va='center', color='k')
 
     def update_plot(self):
         self.bg_plot(self.ax, self.grid)
@@ -270,6 +310,9 @@ class Agent:
 
 env = GridWorld(5, 5)
 env.value_iteration()
+ini_policy = np.ones((5, 5)) * 4
+env.policy_iteration(ini_policy, truncate_time=10)
+plt.show()
 # agent = Agent()
 # for t in range(10):
 #     env.step(agent.act(None))
