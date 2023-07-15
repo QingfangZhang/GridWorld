@@ -1,21 +1,22 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib
+import os
 import time
 matplotlib.use('TkAgg')
 matplotlib.rcParams['figure.max_open_warning'] = 100
 
 
 class GridWorld:
-    def __init__(self, height, width):
+    def __init__(self, height, width, target_pixels, forbidden_pixels, r_target, r_boundary, r_default, r_forbidden):
         self.height, self.width = height, width
-        self.start_row = 1 #self.height//2
-        self.start_col = 3 #self.width//2
+        self.start_row = 1
+        self.start_col = 3
         self.cur_row = self.start_row
         self.cur_col = self.start_col
-        self.target_row = 3
-        self.target_col = 2
-        self.forbidden_pixels = [(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)]  # 以top left作为(0, 0), (row, col)
+        self.target_row = target_pixels[0]
+        self.target_col = target_pixels[1]
+        self.forbidden_pixels = forbidden_pixels  # 以top left作为(0, 0), (row, col)
         self.bg_color = 0.2
         self.forbidden_color = 1
         self.agent_color = 0.8
@@ -24,10 +25,10 @@ class GridWorld:
         for idx in self.forbidden_pixels:
             self.grid[idx[0], idx[1]] = self.forbidden_color
         # self.grid[self.target_row, self.target_col] = self.target_color
-        self.r_target = 1
-        self.r_boundary = -1
-        self.r_default = 0
-        self.r_forbidden = -1
+        self.r_target = r_target
+        self.r_boundary = r_boundary
+        self.r_default = r_default
+        self.r_forbidden = r_forbidden
         self.arrow_x, self.arrow_y = 0, 0
         self.prev_col, self.prev_row = self.cur_col, self.cur_row
         self.t = 0
@@ -127,6 +128,7 @@ class GridWorld:
         reward_table[4, self.target_row, self.target_col] = self.r_target
         reward_table = self.get_reward_pixel(reward_table, self.target_row, self.target_col, self.r_target)
         for idx in self.forbidden_pixels:
+            reward_table[4, idx[0], idx[1]] = self.r_forbidden
             reward_table = self.get_reward_pixel(reward_table, idx[0], idx[1], self.r_forbidden)
         return reward_table.reshape(len(self.actions), -1)
 
@@ -192,7 +194,9 @@ class GridWorld:
         while k < 200:
             action_value = reward + self.discount_factor * \
                            np.matmul(state_transit_prob, np.tile(v0, (len(self.actions), 1, 1))).squeeze()
-            policy = np.argmax(action_value, axis=0)
+            greedy_action_idx = np.argmax(action_value, axis=0)
+            policy = np.zeros_like(action_value)
+            policy[greedy_action_idx, np.arange(policy.shape[1])] = 1  # (n_actions, height * weight)
             v = np.amax(action_value, axis=0).reshape(-1, 1)
             k += 1
             state_value_list.append(v)
@@ -208,7 +212,6 @@ class GridWorld:
         plt.plot(np.linalg.norm(s, axis=0))
 
     def policy_iteration(self, ini_policy, truncate_time):
-        ini_policy = ini_policy.reshape(1, -1).astype(int)  # (1, (height * width))
         reward = self.get_reward_table()  # (n_actions, height * weight)
         state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
         policy = ini_policy
@@ -218,9 +221,10 @@ class GridWorld:
         self.plot_policy_and_state(policy, None, k)
         while k < 200:
             # policy evaluation
-            r = np.array([reward[policy[0, s], s] for s in range(np.size(policy))]).reshape(-1, 1)  # (1, (height * width))
-            s = np.vstack([np.reshape(state_transit_prob[policy[0, s], s, :], (1, -1))
-                           for s in range(np.size(policy))])  # ((height * width), (height * width))
+            greedy_action_idx = np.argmax(policy, axis=0)
+            r = np.array([reward[greedy_action_idx[s], s] for s in range(policy.shape[1])]).reshape(-1, 1)  # ((height * width), 1)
+            s = np.vstack([np.reshape(state_transit_prob[greedy_action_idx[s], s, :], (1, -1))
+                           for s in range(policy.shape[1])])  # ((height * width), (height * width))
             v0 = pre_v
             j = 0
             while j < truncate_time:
@@ -234,7 +238,9 @@ class GridWorld:
             # policy improvement
             action_value = reward + self.discount_factor * \
                            np.matmul(state_transit_prob, np.tile(v, (len(self.actions), 1, 1))).squeeze()
-            policy = np.argmax(action_value, axis=0).reshape(1, -1)
+            greedy_action_idx = np.argmax(action_value, axis=0)
+            policy = np.zeros_like(action_value)
+            policy[greedy_action_idx, np.arange(policy.shape[1])] = 1  # (n_actions, height * weight)
             # self.plot_policy_and_state(policy, v, k)
             state_value_list.append(v)
             if np.linalg.norm(v - pre_v) < 0.001:
@@ -247,36 +253,96 @@ class GridWorld:
         state_value = np.concatenate(state_value_list, axis=1)
         s = np.diff(state_value, axis=1)
         plt.plot(np.linalg.norm(s, axis=0))
+        return policy
+
+    def policy_evaluation(self, policy, truncate_time=10000):
+        reward_table = self.get_reward_table()  # (n_actions, height * weight)
+        state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
+        v0 = np.zeros((self.height * self.width, 1))
+        r = np.sum(reward_table * policy, axis=0).reshape(-1, 1)  # ((height * width), 1)
+        na, ns, ns = state_transit_prob.shape
+        s = np.sum((state_transit_prob.reshape(na*ns, ns) * np.tile(policy.reshape(-1, 1), (1, ns)))
+                   .reshape(na, ns, ns), axis=0).squeeze()  # ((height * width), (height * width))
+        j = 0
+        while j < truncate_time:
+            v = r + self.discount_factor * np.matmul(s, v0)  # ((height * width), 1)
+            if np.linalg.norm((v - v0)) < 0.001:
+                print(f"policy_evaluation iter num: {j}")
+                break
+            else:
+                v0 = v
+            j += 1
+        return v  # ((height * width), 1)
+
+    def MC_epsilon_greedy(self, policy):
+        e = 0.1
+        episode_step = 10000
+        n_actions = len(self.actions)
+        n_states = self.height * self.width
+        assert policy.shape == (n_actions, n_states)  # (n_actions, (height * width))
+        reward = self.get_reward_table()  # (n_actions, height * weight)
+        state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
+        k = 0
+        action_value_pre = np.zeros((n_actions, n_states))
+        pre_v = self.policy_evaluation(policy)
+        self.plot_policy_and_state(policy, pre_v, k)
+        state_value_list = [pre_v]
+        while k < 1000:
+            # generate episode
+            a = [np.random.randint(0, n_actions - 1)]
+            s = [np.random.randint(0, n_states - 1)]
+            for i in range(episode_step-1):
+                s.append(np.argmax(state_transit_prob[a[-1], s[-1], :].squeeze()))
+                a.append(np.random.choice(n_actions, p=policy[:, s[-1]].reshape(-1)))
+            # for i in range(len(a)):
+            #     self.step(self.actions[a[i]])
+            # calculate return
+            g = 0
+            returns = np.zeros((n_actions, n_states))
+            counts = np.zeros((n_actions, n_states))
+            for i in range(len(s)-1, -1, -1):
+                r = reward[a[i], s[i]]
+                g = r + self.discount_factor * g
+                returns[a[i], s[i]] += g
+                counts[a[i], s[i]] += 1
+            action_value = np.where(counts != 0, np.divide(returns, counts), action_value_pre)
+            action_value_pre = action_value
+            policy = np.ones((n_actions, n_states)) * (e / n_actions)
+            greedy_action_idx = np.argmax(action_value, axis=0)
+            policy[greedy_action_idx, np.arange(policy.shape[1])] = 1 - (e / n_actions)*(n_actions-1)
+            v = self.policy_evaluation(policy)
+            # self.plot_policy_and_state(policy, v, k)
+            state_value_list.append(v)
+            if np.linalg.norm(v - pre_v) < 0.001:
+                print(f'MC_epsilon_greedy iteration number: {k}')
+                break
+            else:
+                pre_v = v
+            k += 1
+
+        self.plot_policy_and_state(policy, v, k)
+        plt.figure()
+        state_value = np.concatenate(state_value_list, axis=1)
+        s = np.diff(state_value, axis=1)
+        plt.plot(np.linalg.norm(s, axis=0))
 
     def plot_policy_and_state(self, policy, state, k):
-        fig1, ax1=plt.subplots(1, 2, figsize=(10, 5))
-        grid1 = np.ones((self.height, self.width)) * self.bg_color
+        fig1, ax1 = plt.subplots(1, 2, figsize=(10, 5))
         self.bg_plot(ax1[0], self.grid)
         ax1[0].set_title(f'Policy, k={k}')
         if policy is not None:
-            policy = policy.reshape((self.height, self.width))
+            assert policy.shape == (len(self.actions), self.height * self.width)
             # 生成 x 和 y 矩阵，分别表示每个点的横向和纵向坐标
-            x, y = np.meshgrid(np.arange(policy.shape[1]), np.arange(policy.shape[0]))
-            u = np.zeros_like(policy)
-            v = np.zeros_like(policy)
-            for i in range(policy.shape[0]):
-                for j in range(policy.shape[1]):
-                    if self.actions[policy[i, j]] == 'up':
-                        u[i, j] = 0
-                        v[i, j] = 1
-                    elif self.actions[policy[i, j]] == 'down':
-                        u[i, j] = 0
-                        v[i, j] = -1
-                    elif self.actions[policy[i, j]] == 'left':
-                        u[i, j] = -1
-                        v[i, j] = 0
-                    elif self.actions[policy[i, j]] == 'right':
-                        u[i, j] = 1
-                        v[i, j] = 0
-                    else:  # center
-                        u[i, j] = 0
-                        v[i, j] = 0
-            ax1[0].quiver(x, y, u, v, scale=10, color='red')
+            x, y = np.meshgrid(np.arange(self.width), np.arange(self.height))
+            x, y = x.reshape(-1), y.reshape(-1)
+            u = np.array([0, 1, 0, -1, 0])  # ['up', 'right', 'down', 'left', 'center']
+            v = np.array([1, 0, -1, 0, 0])
+            for i in range(len(x)):
+                xx = np.ones(len(u), dtype=int) * x[i]
+                yy = np.ones(len(u), dtype=int) * y[i]
+                uu = u * policy[:, i].reshape(-1)
+                vv = v * policy[:, i].reshape(-1)
+                ax1[0].quiver(xx, yy, uu, vv, scale=10, color='red')
 
         if state is not None:
             self.bg_plot(ax1[1], self.grid)
@@ -295,7 +361,7 @@ class GridWorld:
             self.ax.add_artist(plt.Circle((self.prev_col, self.prev_row), 0.1, color='blue'))
         self.ax.set_title(self.t)
         plt.draw()  # 重新绘制网格世界和智能体位置
-        plt.pause(1)  # 暂停0.5秒
+        plt.pause(0.5)  # 暂停0.5秒
 
 
 class Agent:
@@ -308,11 +374,30 @@ class Agent:
         return action
 
 
-env = GridWorld(5, 5)
-env.value_iteration()
-ini_policy = np.ones((5, 5)) * 4
-env.policy_iteration(ini_policy, truncate_time=10)
-plt.show()
+GridWorld_height = 5
+GridWorld_width = 5
+env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
+                forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
+                r_target=1, r_boundary=-1, r_default=0, r_forbidden=-10)
+# env.value_iteration()
+ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
+# ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.02
+# ini_policy[4, :] = 0.92
+
+policy = env.policy_iteration(ini_policy, truncate_time=10)
+# plt.show()
+
+env.MC_epsilon_greedy(ini_policy)
+
+# 同一policy, 不同epsilon的state value不同
+# e = 0.5
+# greedy_action_idx = np.argmax(policy, axis=0)
+# policy = np.ones((5, 25)) * (e / 5)
+# policy[greedy_action_idx, np.arange(policy.shape[1])] = 1 - (e / 5) * (5 - 1)
+# v = env.policy_evaluation(policy)
+# env.plot_policy_and_state(policy, v, k=0)
+# plt.show()
+
 # agent = Agent()
 # for t in range(10):
 #     env.step(agent.act(None))
