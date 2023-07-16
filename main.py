@@ -8,10 +8,11 @@ matplotlib.rcParams['figure.max_open_warning'] = 100
 
 
 class GridWorld:
-    def __init__(self, height, width, target_pixels, forbidden_pixels, r_target, r_boundary, r_default, r_forbidden):
+    def __init__(self, height, width, target_pixels, forbidden_pixels, r_target, r_boundary, r_default, r_forbidden,
+                 start_pos=(0, 0)):
         self.height, self.width = height, width
-        self.start_row = 1
-        self.start_col = 3
+        self.start_row = start_pos[0]
+        self.start_col = start_pos[1]
         self.cur_row = self.start_row
         self.cur_col = self.start_col
         self.target_row = target_pixels[0]
@@ -280,7 +281,7 @@ class GridWorld:
         n_actions = len(self.actions)
         n_states = self.height * self.width
         assert policy.shape == (n_actions, n_states)  # (n_actions, (height * width))
-        reward = self.get_reward_table()  # (n_actions, height * weight)
+        reward_table = self.get_reward_table()  # (n_actions, height * weight)
         state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
         k = 0
         action_value_pre = np.zeros((n_actions, n_states))
@@ -301,7 +302,7 @@ class GridWorld:
             returns = np.zeros((n_actions, n_states))
             counts = np.zeros((n_actions, n_states))
             for i in range(len(s)-1, -1, -1):
-                r = reward[a[i], s[i]]
+                r = reward_table[a[i], s[i]]
                 g = r + self.discount_factor * g
                 returns[a[i], s[i]] += g
                 counts[a[i], s[i]] += 1
@@ -325,6 +326,47 @@ class GridWorld:
         state_value = np.concatenate(state_value_list, axis=1)
         s = np.diff(state_value, axis=1)
         plt.plot(np.linalg.norm(s, axis=0))
+
+    def Sarsa(self, init_policy):
+        reward_table = self.get_reward_table()  # (n_actions, height * weight)
+        state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
+        policy = init_policy
+        s_end = self.target_row * self.width + self.target_col
+        q = np.zeros((len(self.actions), self.height * self.width))  # (n_actions, n_states)
+        n_actions = len(self.actions)
+        episode_num = 500
+        episode_length = np.zeros(episode_num)
+        total_reward = np.zeros(episode_num)
+        e = 0.1
+        alpha = 0.1
+        for i in range(episode_num):
+            s = self.start_row * self.width + self.start_col
+            j = 0
+            while s != s_end:
+                a = np.random.choice(len(self.actions), p=policy[:, s].reshape(-1))
+                r1 = reward_table[a, s]
+                s1 = np.argmax(state_transit_prob[a, s, :].squeeze())
+                # a1 = np.random.choice(len(self.actions), p=policy[:, s1].reshape(-1))  # for Sarsa
+                # q[a, s] = q[a, s] - alpha * (q[a, s] - (r1 + self.discount_factor * q[a1, s1]))  # for Sarsa
+                vt = np.sum(q[:, s1] * policy[:, s1], axis=0).squeeze()  # for expected Sarsa
+                q[a, s] = q[a, s] - alpha * (q[a, s] - (r1 + self.discount_factor * vt))  # for expected Sarsa
+                greedy_a = np.argmax(q[:, s], axis=0)
+                policy[:, s] = e / n_actions
+                policy[greedy_a, s] = 1 - e / n_actions * (n_actions -1)
+                total_reward[i] += r1
+                j += 1
+                s = s1
+            episode_length[i] = j
+
+        v = self.policy_evaluation(policy)
+        self.plot_policy_and_state(policy, v, k=500)
+        fig, axe = plt.subplots(2, 1)
+        axe[0].plot(total_reward)
+        axe[0].set_xlabel('episode num')
+        axe[0].set_ylabel('total reward')
+        axe[1].plot(episode_length)
+        axe[1].set_xlabel('episode num')
+        axe[1].set_ylabel('episode length')
 
     def plot_policy_and_state(self, policy, state, k):
         fig1, ax1 = plt.subplots(1, 2, figsize=(10, 5))
@@ -374,20 +416,20 @@ class Agent:
         return action
 
 
-GridWorld_height = 5
-GridWorld_width = 5
-env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
-                forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
-                r_target=1, r_boundary=-1, r_default=0, r_forbidden=-10)
-# env.value_iteration()
-ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
+# GridWorld_height = 5
+# GridWorld_width = 5
+# env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
+#                 forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
+#                 r_target=1, r_boundary=-1, r_default=0, r_forbidden=-10)
+# # env.value_iteration()
+# ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
 # ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.02
 # ini_policy[4, :] = 0.92
 
-policy = env.policy_iteration(ini_policy, truncate_time=10)
+# policy = env.policy_iteration(ini_policy, truncate_time=10)
 # plt.show()
 
-env.MC_epsilon_greedy(ini_policy)
+# env.MC_epsilon_greedy(ini_policy)
 
 # 同一policy, 不同epsilon的state value不同
 # e = 0.5
@@ -402,3 +444,11 @@ env.MC_epsilon_greedy(ini_policy)
 # for t in range(10):
 #     env.step(agent.act(None))
 # plt.show()
+
+GridWorld_height = 5
+GridWorld_width = 5
+env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
+                forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
+                r_target=0, r_boundary=-10, r_default=-1, r_forbidden=-10, start_pos=(0, 0))
+init_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
+env.Sarsa(init_policy)
