@@ -277,7 +277,7 @@ class GridWorld:
 
     def MC_epsilon_greedy(self, policy):
         e = 0.1
-        episode_step = 10000
+        episode_step = 1000000
         n_actions = len(self.actions)
         n_states = self.height * self.width
         assert policy.shape == (n_actions, n_states)  # (n_actions, (height * width))
@@ -288,13 +288,13 @@ class GridWorld:
         pre_v = self.policy_evaluation(policy)
         self.plot_policy_and_state(policy, pre_v, k)
         state_value_list = [pre_v]
-        while k < 1000:
+        while k < 10:
             # generate episode
-            a = [np.random.randint(0, n_actions - 1)]
             s = [np.random.randint(0, n_states - 1)]
+            a = [np.random.randint(0, n_actions - 1)]
             for i in range(episode_step-1):
                 s.append(np.argmax(state_transit_prob[a[-1], s[-1], :].squeeze()))
-                a.append(np.random.choice(n_actions, p=policy[:, s[-1]].reshape(-1)))
+                a.append(np.random.choice(np.arange(n_actions), p=policy[:, s[-1]].reshape(-1)))
             # for i in range(len(a)):
             #     self.step(self.actions[a[i]])
             # calculate return
@@ -312,7 +312,7 @@ class GridWorld:
             greedy_action_idx = np.argmax(action_value, axis=0)
             policy[greedy_action_idx, np.arange(policy.shape[1])] = 1 - (e / n_actions)*(n_actions-1)
             v = self.policy_evaluation(policy)
-            # self.plot_policy_and_state(policy, v, k)
+            self.plot_policy_and_state(policy, v, k)
             state_value_list.append(v)
             if np.linalg.norm(v - pre_v) < 0.001:
                 print(f'MC_epsilon_greedy iteration number: {k}')
@@ -416,20 +416,20 @@ class Agent:
         return action
 
 
-# GridWorld_height = 5
-# GridWorld_width = 5
-# env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
-#                 forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
-#                 r_target=1, r_boundary=-1, r_default=0, r_forbidden=-10)
+GridWorld_height = 5
+GridWorld_width = 5
+env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
+                forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
+                r_target=1, r_boundary=-1, r_default=0, r_forbidden=-1)
 # # env.value_iteration()
-# ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
+ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
 # ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.02
 # ini_policy[4, :] = 0.92
 
 # policy = env.policy_iteration(ini_policy, truncate_time=10)
 # plt.show()
 
-# env.MC_epsilon_greedy(ini_policy)
+env.MC_epsilon_greedy(ini_policy)
 
 # 同一policy, 不同epsilon的state value不同
 # e = 0.5
@@ -445,10 +445,10 @@ class Agent:
 #     env.step(agent.act(None))
 # plt.show()
 
-GridWorld_height = 5
-GridWorld_width = 5
-env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
-                forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
-                r_target=0, r_boundary=-10, r_default=-1, r_forbidden=-10, start_pos=(0, 0))
-init_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
-env.Sarsa(init_policy)
+# GridWorld_height = 5
+# GridWorld_width = 5
+# env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
+#                 forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
+#                 r_target=0, r_boundary=-10, r_default=-1, r_forbidden=-10, start_pos=(0, 0))
+# init_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
+# env.Sarsa(init_policy)
