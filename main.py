@@ -268,7 +268,7 @@ class GridWorld:
         while j < truncate_time:
             v = r + self.discount_factor * np.matmul(s, v0)  # ((height * width), 1)
             if np.linalg.norm((v - v0)) < 0.001:
-                print(f"policy_evaluation iter num: {j}")
+                # print(f"policy_evaluation iter num: {j}")
                 break
             else:
                 v0 = v
@@ -277,7 +277,7 @@ class GridWorld:
 
     def MC_epsilon_greedy(self, policy):
         e = 0.1
-        episode_step = 1000000
+        episode_step = 50000
         n_actions = len(self.actions)
         n_states = self.height * self.width
         assert policy.shape == (n_actions, n_states)  # (n_actions, (height * width))
@@ -288,7 +288,7 @@ class GridWorld:
         pre_v = self.policy_evaluation(policy)
         self.plot_policy_and_state(policy, pre_v, k)
         state_value_list = [pre_v]
-        while k < 10:
+        while k < 10000:
             # generate episode
             s = [np.random.randint(0, n_states - 1)]
             a = [np.random.randint(0, n_actions - 1)]
@@ -312,7 +312,7 @@ class GridWorld:
             greedy_action_idx = np.argmax(action_value, axis=0)
             policy[greedy_action_idx, np.arange(policy.shape[1])] = 1 - (e / n_actions)*(n_actions-1)
             v = self.policy_evaluation(policy)
-            self.plot_policy_and_state(policy, v, k)
+            # self.plot_policy_and_state(policy, v, k)
             state_value_list.append(v)
             if np.linalg.norm(v - pre_v) < 0.001:
                 print(f'MC_epsilon_greedy iteration number: {k}')
@@ -326,6 +326,7 @@ class GridWorld:
         state_value = np.concatenate(state_value_list, axis=1)
         s = np.diff(state_value, axis=1)
         plt.plot(np.linalg.norm(s, axis=0))
+        return policy, v, k
 
     def Sarsa(self, init_policy):
         reward_table = self.get_reward_table()  # (n_actions, height * weight)
@@ -429,7 +430,14 @@ ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_action
 # policy = env.policy_iteration(ini_policy, truncate_time=10)
 # plt.show()
 
-env.MC_epsilon_greedy(ini_policy)
+# policy, v, k = env.MC_epsilon_greedy(ini_policy)
+# np.savez('policy_MC_epsilon_greedy_0.1_1.npz', policy, v, k)
+# data = np.load('policy_MC_epsilon_greedy_0.1_1.npz')
+# policy = data['arr_0']
+# v = data['arr_1']
+# k = data['arr_2']
+# env.plot_policy_and_state(policy, v, k)
+# plt.show()
 
 # 同一policy, 不同epsilon的state value不同
 # e = 0.5
