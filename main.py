@@ -3,6 +3,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 import os
 import time
+import copy
 matplotlib.use('TkAgg')
 matplotlib.rcParams['figure.max_open_warning'] = 100
 
@@ -212,7 +213,7 @@ class GridWorld:
         s = np.diff(state_value, axis=1)
         plt.plot(np.linalg.norm(s, axis=0))
 
-    def policy_iteration(self, ini_policy, truncate_time):
+    def policy_iteration(self, ini_policy, truncate_time=10):
         reward = self.get_reward_table()  # (n_actions, height * weight)
         state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
         policy = ini_policy
@@ -254,7 +255,7 @@ class GridWorld:
         state_value = np.concatenate(state_value_list, axis=1)
         s = np.diff(state_value, axis=1)
         plt.plot(np.linalg.norm(s, axis=0))
-        return policy
+        return policy, v, k
 
     def policy_evaluation(self, policy, truncate_time=10000):
         reward_table = self.get_reward_table()  # (n_actions, height * weight)
@@ -351,6 +352,8 @@ class GridWorld:
                 # q[a, s] = q[a, s] - alpha * (q[a, s] - (r1 + self.discount_factor * q[a1, s1]))  # for Sarsa
                 vt = np.sum(q[:, s1] * policy[:, s1], axis=0).squeeze()  # for expected Sarsa
                 q[a, s] = q[a, s] - alpha * (q[a, s] - (r1 + self.discount_factor * vt))  # for expected Sarsa
+                # for on-policy Q-learning
+                # q[a, s] = q[a, s] - alpha * (q[a, s] - (r1 + self.discount_factor * np.max(q[:, s1], axis=0)))
                 greedy_a = np.argmax(q[:, s], axis=0)
                 policy[:, s] = e / n_actions
                 policy[greedy_a, s] = 1 - e / n_actions * (n_actions -1)
@@ -368,6 +371,50 @@ class GridWorld:
         axe[1].plot(episode_length)
         axe[1].set_xlabel('episode num')
         axe[1].set_ylabel('episode length')
+
+    def QLearning(self, policy_be):
+        n_actions = len(self.actions)
+        n_states = self.height * self.width
+        reward_table = self.get_reward_table()  # (n_actions, height * weight)
+        state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
+        q = np.zeros((len(self.actions), self.height * self.width))  # (n_actions, n_states)
+        policy_target = copy.deepcopy(policy_be)
+        pre_v = self.policy_evaluation(policy_target)
+        k = 0
+        self.plot_policy_and_state(policy_target, pre_v, k)
+        _, optimal_v, _ = self.policy_iteration(policy_target)
+        s = [np.random.randint(0, n_states - 1)]
+        a = [np.random.randint(0, n_actions - 1)]
+        alpha = 0.1
+        state_value_list = [pre_v]
+        v_diff_optimal = []
+        while k <= 100000:
+            r1 = reward_table[a, s]
+            s1 = np.argmax(state_transit_prob[a, s, :].squeeze())
+            q[a, s] = q[a, s] - alpha * (q[a, s] - (r1 + self.discount_factor * np.max(q[:, s1], axis=0)))
+            greedy_a = np.argmax(q[:, s], axis=0)
+            policy_target[:, s] = 0
+            policy_target[greedy_a, s] = 1
+            s = s1
+            a = np.random.choice(np.arange(n_actions), p=policy_be[:, s].reshape(-1))
+            v = self.policy_evaluation(policy_target)
+            state_value_list.append(v)
+            v_diff_optimal.append(np.linalg.norm(v - optimal_v))
+            if np.linalg.norm(v - optimal_v) < 0.001:
+                print(f'Q_learning iteration number: {k}')
+                break
+            else:
+                pre_v = v
+            k += 1
+
+        self.plot_policy_and_state(policy_target, v, k)
+        plt.figure()
+        state_value = np.concatenate(state_value_list, axis=1)
+        s = np.diff(state_value, axis=1)
+        plt.plot(np.linalg.norm(s, axis=0))
+        plt.figure()
+        plt.plot(v_diff_optimal)
+        return policy_target, v, k
 
     def plot_policy_and_state(self, policy, state, k):
         fig1, ax1 = plt.subplots(1, 2, figsize=(10, 5))
@@ -423,12 +470,16 @@ env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
                 forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
                 r_target=1, r_boundary=-1, r_default=0, r_forbidden=-1)
 # # env.value_iteration()
-ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
-# ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.02
-# ini_policy[4, :] = 0.92
+# ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
+ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.02
+ini_policy[1, :] = 0.92
+# ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.1
+# ini_policy[1, :] = 0.6
 
 # policy = env.policy_iteration(ini_policy, truncate_time=10)
 # plt.show()
+
+env.QLearning(ini_policy)
 
 # policy, v, k = env.MC_epsilon_greedy(ini_policy)
 # np.savez('policy_MC_epsilon_greedy_0.1_1.npz', policy, v, k)
