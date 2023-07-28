@@ -4,6 +4,9 @@ import matplotlib
 import os
 import time
 import copy
+import torch
+from torch import nn
+import torch.nn.functional as F
 matplotlib.use('TkAgg')
 matplotlib.rcParams['figure.max_open_warning'] = 100
 
@@ -416,6 +419,81 @@ class GridWorld:
         plt.plot(v_diff_optimal)
         return policy_target, v, k
 
+    def get_batch(self, s, a, r, s1, batch_size):
+        idx = torch.randint(0, len(s), (batch_size, ))
+        s_batch = torch.tensor([s[i] for i in idx], dtype=torch.float32).reshape((-1, 1))
+        a_batch = torch.tensor([a[i] for i in idx])
+        r_batch = torch.tensor([r[i] for i in idx], dtype=torch.float32)
+        s1_batch = torch.tensor([s1[i] for i in idx], dtype=torch.float32).reshape((-1, 1))
+        s_batch = torch.cat((s_batch // self.width, s_batch % self.width), dim=1) / self.width
+        s1_batch = torch.cat((s1_batch // self.width, s1_batch % self.width), dim=1) / self.width
+        return s_batch, a_batch, r_batch, s1_batch
+
+    def DQN(self, policy_be):
+        @torch.no_grad()
+        def get_policy():
+            main_net.eval()
+            s = torch.arange(n_states, dtype=torch.float32).reshape((-1, 1))
+            s = torch.cat((s // self.width, s % self.width), dim=1) / self.width
+            y_pred = main_net(s)
+            a = torch.argmax(y_pred, dim=1)
+            policy = np.zeros((n_actions, n_states))
+            policy[a, np.arange(n_states)] = 1
+            v = self.policy_evaluation(policy)
+            main_net.train()
+            return policy, v
+
+        n_actions = len(self.actions)
+        n_states = self.height * self.width
+        reward_table = self.get_reward_table()  # (n_actions, height * weight)
+        state_transit_prob = self.get_state_transit_prob()  # (n_actions, (height * width), (height * width))
+        pre_v = self.policy_evaluation(policy_be)
+        self.plot_policy_and_state(policy_be, pre_v, k=0)
+        _, optimal_v, _ = self.policy_iteration(policy_be)
+        s = [np.random.randint(0, n_states - 1)]
+        a = [np.random.randint(0, n_actions - 1)]
+        r = [reward_table[a[-1], s[-1]]]
+        v_diff_optimal = []
+        k = 0
+        while k < 1000:
+            s.append(np.argmax(state_transit_prob[a[-1], s[-1], :].squeeze()))
+            a.append(np.random.choice(np.arange(n_actions), p=policy_be[:, s[-1]].reshape(-1)))
+            r.append(reward_table[a[-1], s[-1]])
+            k += 1
+        main_net = Model(2, n_actions)
+        target_net = Model(2, n_actions)
+        target_net.load_state_dict(main_net.state_dict())
+        lr = 0.05
+        batch_size = 100
+        optimizer = torch.optim.Adam(main_net.parameters(), lr=lr)
+        loss = nn.MSELoss()
+        num_iter = 1000
+        losslist = []
+        main_net.train()
+        for i in range(num_iter):
+            sb, ab, rb, s1b = self.get_batch(s=s[:-1], a=a[:-1], r=r[:-1], s1=s[1:], batch_size=batch_size)
+            y_all = main_net(sb)
+            y = y_all[torch.arange(batch_size), ab]
+            with torch.no_grad():
+                yt_all = target_net(s1b)
+                yt = rb + self.discount_factor * torch.max(yt_all, dim=1)[0]
+            l = loss(y, yt)
+            optimizer.zero_grad()
+            l.backward()
+            optimizer.step()
+            if i % 50 == 0:
+                target_net.load_state_dict(main_net.state_dict())
+            losslist.append(l.detach())
+            policy, v = get_policy()
+            v_diff_optimal.append(np.linalg.norm(v - optimal_v))
+        plt.figure()
+        plt.plot(losslist), plt.title('loss')
+        plt.figure()
+        plt.plot(v_diff_optimal), plt.title('v_diff_optimal')
+        policy, v = get_policy()
+        self.plot_policy_and_state(policy, v, k=num_iter)
+        plt.show()
+
     def plot_policy_and_state(self, policy, state, k):
         fig1, ax1 = plt.subplots(1, 2, figsize=(10, 5))
         self.bg_plot(ax1[0], self.grid)
@@ -454,6 +532,23 @@ class GridWorld:
         plt.pause(0.5)  # 暂停0.5秒
 
 
+class Model(nn.Module):
+    def __init__(self, n_observations, n_actions):
+        super(Model, self).__init__()
+        self.layer1 = nn.Linear(n_observations, 128)
+        self.layer2 = nn.Linear(128, 128)
+        self.layer3 = nn.Linear(128, n_actions)
+        # self.apply(self.init_weights)
+
+    def forward(self, x):
+        x = F.relu(self.layer1(x))
+        x = F.relu(self.layer2(x))
+        return self.layer3(x)
+
+    def init_weights(self, m):
+        if type(m) == nn.Linear:
+            nn.init.normal_(m.weight, std=0.01)
+
 class Agent:
     def __init__(self):
         self.actions = ['up', 'right', 'down', 'left', 'center']
@@ -468,18 +563,19 @@ GridWorld_height = 5
 GridWorld_width = 5
 env = GridWorld(GridWorld_height, GridWorld_width, target_pixels=(3, 2),
                 forbidden_pixels=[(1, 1), (1, 2), (2, 2), (3, 1), (4, 1), (3, 3)],
-                r_target=1, r_boundary=-1, r_default=0, r_forbidden=-1)
+                r_target=1, r_boundary=-10, r_default=0, r_forbidden=-10)
 # # env.value_iteration()
-# ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
-ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.02
-ini_policy[1, :] = 0.92
+ini_policy = np.ones((5, GridWorld_height * GridWorld_width)) * 0.2  # (n_actions, height * width)
+# ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.02
+# ini_policy[1, :] = 0.92
 # ini_policy = np.ones((5, GridWorld_height * GridWorld_width))*0.1
 # ini_policy[1, :] = 0.6
 
 # policy = env.policy_iteration(ini_policy, truncate_time=10)
 # plt.show()
 
-env.QLearning(ini_policy)
+# env.QLearning(ini_policy)
+env.DQN(ini_policy)
 
 # policy, v, k = env.MC_epsilon_greedy(ini_policy)
 # np.savez('policy_MC_epsilon_greedy_0.1_1.npz', policy, v, k)
